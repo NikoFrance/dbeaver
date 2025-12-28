@@ -29,24 +29,47 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
     private final boolean allowNamedQuotes;
     private final boolean fullyConsumeNamed;
     private final boolean fullyConsumeUnnamed;
+
+    // If true -> treat dollar quotes as string; if false -> treat as code block
+    private final boolean ddTagIsString;
+    private final boolean ddPlainIsString;
+
     private final TPToken stringToken;
+    private final TPToken dollarCodeToken;
     private final TPToken delimiterToken;
 
     /**
      * Dollar quoting rule constructor
-     * @param partitionRule       whether this rule is a partition rule or not
-     * @param allowNamedQuotes    whether this rule supports named quotes ({@code $named$}) or not
-     * @param fullyConsumeNamed   whether this rule should stop after consuming named quote
-     *                            or continue until matching the closing one, treating everything between as a string
-     * @param fullyConsumeUnnamed same as {@code fullyConsumeNamed}, but for unnamed quotes
+     *
+     * @param partitionRule whether this rule is a partition rule or not
+     * @param allowNamedQuotes whether this rule supports named quotes ({@code $named$}) or not
+     * @param fullyConsumeNamed whether this rule should stop after consuming named quote
+     *   or continue until matching the closing one, treating everything between as a string/code
+     * @param fullyConsumeUnnamed same as {@code fullyConsumeNamed}, but for unnamed quotes ($$)
+     * @param ddTagIsString if true then $tag$...$tag$ is treated as STRING, otherwise as CODE
+     * @param ddPlainIsString if true then $$...$$ is treated as STRING, otherwise as CODE
      */
-    public SQLDollarQuoteRule(boolean partitionRule, boolean allowNamedQuotes, boolean fullyConsumeNamed, boolean fullyConsumeUnnamed) {
+    public SQLDollarQuoteRule(
+        boolean partitionRule,
+        boolean allowNamedQuotes,
+        boolean fullyConsumeNamed,
+        boolean fullyConsumeUnnamed,
+        boolean ddTagIsString,
+        boolean ddPlainIsString
+    ) {
         this.partitionRule = partitionRule;
         this.allowNamedQuotes = allowNamedQuotes;
-        this.fullyConsumeNamed = fullyConsumeNamed || partitionRule;
-        this.fullyConsumeUnnamed = fullyConsumeUnnamed || partitionRule;
+
+        // If this is NOT a partition rule, allow "consume all" behavior.
+        // For partitioning we must be careful and stop at the right boundary.
+        this.fullyConsumeNamed = fullyConsumeNamed || !partitionRule;
+        this.fullyConsumeUnnamed = fullyConsumeUnnamed || !partitionRule;
+
+        this.ddTagIsString = ddTagIsString;
+        this.ddPlainIsString = ddPlainIsString;
 
         this.stringToken = new TPTokenDefault(SQLTokenType.T_STRING);
+        this.dollarCodeToken = new TPTokenDefault(SQLTokenType.T_DOLLAR_CODE);
         this.delimiterToken = new SQLBlockToggleToken();
     }
 
@@ -64,17 +87,21 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
     public TPToken evaluate(TPCharacterScanner scanner, boolean resume) {
         String start = this.tryReadDollarQuote(scanner);
         if (start != null) {
+            // start == "$$" (len=2) or "$tag$" (len>2)
             if ((start.length() == 2 && this.fullyConsumeUnnamed) || (start.length() > 2 && this.fullyConsumeNamed)) {
                 int c = scanner.read();
                 int captured = 1;
+
                 while (c != TPCharacterScanner.EOF) {
                     if (c == '$') {
                         scanner.unread();
+                        scanner.unread();
                         captured--;
+
                         String end = this.tryReadDollarQuote(scanner);
                         if (end != null) {
                             if (end.equals(start)) {
-                                return this.stringToken;
+                                return chooseToken(start);
                             } else {
                                 // unread ending quote in case it is the real ending
                                 scanner.unread();
@@ -84,19 +111,28 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
                             scanner.read();
                             captured++;
                         }
+                    } else {
+                        c = scanner.read();
+                        captured++;
                     }
-                    c = scanner.read();
-                    captured++;
                 }
+
                 unread(scanner, captured + start.length());
             } else {
-                if (!this.partitionRule) {
+                if (this.partitionRule) {
                     return this.delimiterToken;
                 }
             }
         }
 
         return TPTokenAbstract.UNDEFINED;
+    }
+
+    private TPToken chooseToken(String start) {
+        // start is either "$$" or "$tag$"
+        boolean isPlain = "$$".equals(start);
+        boolean treatAsString = isPlain ? ddPlainIsString : ddTagIsString;
+        return treatAsString ? stringToken : dollarCodeToken;
     }
 
     private String tryReadDollarQuote(TPCharacterScanner scanner) {
@@ -111,6 +147,7 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
                     qname.append((char) c);
                     c = scanner.read();
                     totalRead++;
+
                     if (c == '$') {
                         qname.append((char) c);
                         return qname.toString();
@@ -120,7 +157,7 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
                 c = scanner.read();
                 totalRead++;
                 if (c == '$') {
-                    return  "$$";
+                    return "$$";
                 }
             }
         }
@@ -134,5 +171,4 @@ public class SQLDollarQuoteRule implements TPPredicateRule {
             scanner.unread();
         }
     }
-
 }
