@@ -1116,9 +1116,18 @@ public class PostgreDialect extends JDBCSQLDialect implements TPRuleProvider, SQ
                 : CommonUtils.getBoolean(dataSource.getActualConnectionConfiguration().getProviderProperty(PostgreConstants.PROP_DD_PLAIN_STRING), ddPlainDefault);
 
             return new TPRule[] {
-                new SQLDollarQuoteRule(position == RulePosition.PARTITION, true, ddTagIsString, ddPlainIsString),
-                new PostgreEscapeStringRule()
-            };
+    new SQLDollarQuoteRule(
+        position == RulePosition.PARTITION,
+        true,
+        ddTagIsString,
+        ddPlainIsString,
+        ddTagIsString,
+        ddPlainIsString
+    ),
+    new PostgreEscapeStringRule()
+};
+                
+            
         }
         return new TPRule[0];
     }
